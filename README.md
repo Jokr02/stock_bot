@@ -1,6 +1,6 @@
 # 📈 Discord Stock News Bot
 
-A complete Discord bot for tracking stock and ETF news, posting updates, generating visual charts, and summarizing news with OpenAI. The bot supports slash commands, error reporting, PDF generation, and chart visualizations.
+A complete Discord bot for tracking stock and ETF news, posting updates, generating visual charts, and summarizing news with OpenAI. Includes slash commands, error reporting, PDF generation, chart visualizations, and time-based logic.
 
 ---
 
@@ -50,6 +50,7 @@ NEWSDATA_API_KEY=...
 OPENAI_API_KEY=...
 REPORT_HOUR=22
 PDF_REPORT_PATH=/opt/stock-bot/reports/
+MARKET_TIMEZONE=Europe/Berlin
 ```
 
 ---
@@ -82,16 +83,16 @@ sudo systemctl enable --now stock-bot
 
 ## 💬 Slash Commands
 
-| Command            | Description                                          |
-|--------------------|------------------------------------------------------|
-| `/addstock SYMBOL` | Add a stock/ETF to tracking list                     |
-| `/removestock`     | Remove a stock/ETF                                   |
-| `/validate_stocks` | Re-validate symbols and update types                 |
-| `/liststocks`      | Show all tracked symbols with types                  |
-| `/news`            | Manually fetch and post current stock news           |
-| `/report`          | Generate and send daily news summary PDF             |
-| `/graphs format:pdf` | Generate 7-day charts as combined PDF              |
-| `/graphs format:images` | Generate and send charts as separate images     |
+| Command                  | Description                                          |
+|--------------------------|------------------------------------------------------|
+| `/addstock SYMBOL`       | Add a stock/ETF to tracking list                     |
+| `/removestock`           | Remove a stock/ETF                                   |
+| `/validate_stocks`       | Re-validate symbols and update types                 |
+| `/liststocks`            | Show all tracked symbols with types                  |
+| `/news`                  | Manually fetch and post current stock news           |
+| `/report`                | Generate and send daily news summary PDF             |
+| `/graphs format:pdf`     | Generate 7-day charts as combined PDF                |
+| `/graphs format:images`  | Generate and send charts as separate images          |
 
 ---
 
@@ -103,7 +104,9 @@ sudo systemctl enable --now stock-bot
 - Error reporting via Discord webhook
 - Duplicate news filtering
 - Slash command support
-- Clean channel reports & archived summaries
+- Channel cleanup before daily summary
+- Market-time aware logic (based on `MARKET_TIMEZONE`)
+- Skips tasks & blocks manual commands when market is closed
 
 ---
 
