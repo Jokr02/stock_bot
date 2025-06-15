@@ -17,6 +17,8 @@ from PyPDF2 import PdfMerger
 
 from datetime import datetime, timezone
 from discord import app_commands
+import pytz
+
 
 POSTED_PDF_DIR = "/opt/stock-bot/posted_pdfs"
 os.makedirs(POSTED_PDF_DIR, exist_ok=True)
@@ -57,6 +59,8 @@ def generate_daily_report_from_pdfs(date_str):
     return output_path
 
 load_dotenv()
+MARKET_TIMEZONE = pytz.timezone(os.getenv("MARKET_TIMEZONE", "Europe/Berlin"))
+
 
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GUILD_ID = int(os.getenv("DISCORD_GUILD_ID"))
@@ -262,6 +266,20 @@ def generate_daily_report(text_content, date_str):
     HTML(string=html).write_pdf(output_path)
     return output_path
 
+
+def is_market_open():
+    now = datetime.now(MARKET_TIMEZONE)
+    weekday = now.weekday()
+    hour = now.hour
+    minute = now.minute
+    # Default NYSE hours in Europe/Berlin timezone: 15:30–22:00
+    if weekday >= 5:
+        return False
+    if (hour > 15 or (hour == 15 and minute >= 30)) and (hour < 22):
+        return True
+    return False
+
+
 def is_valid_symbol(symbol):
     """Checks whether the symbol exists on Finnhub."""
     try:
@@ -281,6 +299,7 @@ def is_valid_symbol(symbol):
 
 @tasks.loop(hours=2)
 async def periodic_news():
+    if not is_market_open(): return
     channel = bot.get_channel(CHANNEL_ID)
     tickers = load_stocks()
     news_sections = []
@@ -302,6 +321,7 @@ async def periodic_news():
 
 @tasks.loop(hours=24)
 async def daily_news():
+    if not is_market_open(): return
     channel = bot.get_channel(CHANNEL_ID)
     stocks = load_stocks()
     news = fetch_news(stocks)
@@ -310,6 +330,9 @@ async def daily_news():
 
 @bot.tree.command(name="news", description="Manually post current stock news")
 async def manual_news(interaction: discord.Interaction):
+    if not is_market_open():
+        await interaction.response.send_message("⚠️ The market is currently closed. Data is available Mon–Fri, 15:30–22:00 Europe/Berlin time.")
+        return
     await interaction.response.defer()
     stocks = load_stocks()
     news = fetch_news(stocks)
@@ -406,6 +429,7 @@ async def on_ready():
 
 @tasks.loop(minutes=5)
 async def post_daily_stock_graphs():
+    if not is_market_open(): return
     now = datetime.now()
     if now.hour == 18 and now.minute < 5:
         try:
@@ -449,6 +473,9 @@ async def post_daily_stock_graphs():
 @bot.tree.command(name="graphs", description="Manually post current stock/ETF 7-day graphs")
 @app_commands.describe(format="Choose output format: pdf or images")
 async def manual_post_graphs(interaction: discord.Interaction, format: str = "pdf"):
+    if not is_market_open():
+        await interaction.response.send_message("⚠️ The market is currently closed. Charts are available Mon–Fri, 15:30–22:00 Europe/Berlin time.")
+        return
     await interaction.response.defer(thinking=True)
     stocks = load_stocks()
     chart_paths = []
@@ -600,8 +627,3 @@ async def check_for_report_time():
         # Reset cache
         save_posted_news({})
         clear_posted_pdfs()
-
-
-
-
-
