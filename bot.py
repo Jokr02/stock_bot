@@ -15,6 +15,9 @@ from datetime import timezone, timedelta
 from bs4 import BeautifulSoup
 from PyPDF2 import PdfMerger
 
+from datetime import datetime, timezone
+from discord import app_commands
+
 POSTED_PDF_DIR = "/opt/stock-bot/posted_pdfs"
 os.makedirs(POSTED_PDF_DIR, exist_ok=True)
 
@@ -305,7 +308,7 @@ async def daily_news():
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     await channel.send(f"🗞 **Daily Stock News ({now})**\n{news}")
 
-@bot.tree.command(name="news", description="Manuell aktuelle Aktiennachrichten posten")
+@bot.tree.command(name="news", description="Manually post current stock news")
 async def manual_news(interaction: discord.Interaction):
     await interaction.response.defer()
     stocks = load_stocks()
@@ -397,6 +400,149 @@ async def on_ready():
     periodic_news.start()
     daily_news.start()
     check_for_report_time.start()
+    post_daily_stock_graphs.start()
+
+
+
+@tasks.loop(minutes=5)
+async def post_daily_stock_graphs():
+    now = datetime.now()
+    if now.hour == 18 and now.minute < 5:
+        try:
+            stocks = load_stocks()
+            for symbol in stocks:
+                try:
+                    import matplotlib.pyplot as plt
+                    img_path = f"/tmp/{symbol}_chart.png"
+                    end = datetime.now(timezone.utc)
+                    start = end - timedelta(days=7)
+                    url = f"https://finnhub.io/api/v1/stock/candle"
+                    params = {
+                        "symbol": symbol,
+                        "resolution": "D",
+                        "from": int(start.timestamp()),
+                        "to": int(end.timestamp()),
+                        "token": FINNHUB_API_KEY
+                    }
+                    r = requests.get(url, params=params)
+                    data = r.json()
+                    if data.get("s") == "ok":
+                        plt.figure(figsize=(6, 3))
+                        plt.plot([datetime.utcfromtimestamp(t) for t in data["t"]], data["c"], marker="o")
+                        plt.title(f"{symbol} - 7 Day Price")
+                        plt.xlabel("Date")
+                        plt.ylabel("Close Price")
+                        plt.grid(True)
+                        plt.tight_layout()
+                        plt.savefig(img_path)
+                        plt.close()
+
+                        with open(img_path, "rb") as f:
+                            requests.post(os.getenv("STOCK_GRAPH_WEBHOOK_URL"), files={"file": f})
+                except Exception as e:
+                    send_error_webhook(f"📉 Error creating graph for {symbol}: {e}")
+        except Exception as e:
+            send_error_webhook(f"📊 Error in daily stock graph task: {e}")
+
+
+
+@bot.tree.command(name="graphs", description="Manually post current stock/ETF 7-day graphs")
+@app_commands.describe(format="Choose output format: pdf or images")
+async def manual_post_graphs(interaction: discord.Interaction, format: str = "pdf"):
+    await interaction.response.defer(thinking=True)
+    stocks = load_stocks()
+    chart_paths = []
+
+    async def generate_chart(symbol):
+        try:
+            import matplotlib.pyplot as plt
+            img_path = f"/tmp/{symbol}_manual_chart.png"
+            end = datetime.now(timezone.utc)
+            start = end - timedelta(days=7)
+            url = f"https://finnhub.io/api/v1/stock/candle"
+            params = {
+                "symbol": symbol,
+                "resolution": "D",
+                "from": int(start.timestamp()),
+                "to": int(end.timestamp()),
+                "token": FINNHUB_API_KEY
+            }
+            r = requests.get(url, params=params)
+            data = r.json()
+            if data.get("s") == "ok":
+                plt.figure(figsize=(6, 3))
+                plt.plot([datetime.utcfromtimestamp(t) for t in data["t"]], data["c"], marker="o")
+                plt.title(f"{symbol} - 7 Day Price")
+                plt.xlabel("Date")
+                plt.ylabel("Close Price")
+                plt.grid(True)
+                plt.tight_layout()
+                plt.savefig(img_path)
+                plt.close()
+                return symbol, img_path
+        except Exception as e:
+            send_error_webhook(f"📉 Error creating graph for {symbol}: {e}")
+        return symbol, None
+
+    import asyncio
+    results = await asyncio.gather(*(generate_chart(sym) for sym in stocks))
+
+    for symbol, path in results:
+        if path:
+            chart_paths.append((symbol, path))
+
+    if format.lower() == "images":
+        for _, path in chart_paths:
+            await interaction.followup.send(file=discord.File(path))
+    else:
+        if not chart_paths:
+            await interaction.followup.send("⚠️ No charts could be generated.")
+            return
+
+        from PyPDF2 import PdfMerger
+        merger = PdfMerger()
+        for _, path in chart_paths:
+            merger.append(path)
+        pdf_path = "/tmp/graphs_report.pdf"
+        merger.write(pdf_path)
+        merger.close()
+        await interaction.followup.send(content="📊 All graphs combined in one PDF", file=discord.File(pdf_path))
+async def manual_post_graphs(interaction: discord.Interaction):
+    await interaction.response.defer()
+    try:
+        stocks = load_stocks()
+        for symbol in stocks:
+            try:
+                import matplotlib.pyplot as plt
+                img_path = f"/tmp/{symbol}_manual_chart.png"
+                end = datetime.now(timezone.utc)
+                start = end - timedelta(days=7)
+                url = f"https://finnhub.io/api/v1/stock/candle"
+                params = {
+                    "symbol": symbol,
+                    "resolution": "D",
+                    "from": int(start.timestamp()),
+                    "to": int(end.timestamp()),
+                    "token": FINNHUB_API_KEY
+                }
+                r = requests.get(url, params=params)
+                data = r.json()
+                if data.get("s") == "ok":
+                    plt.figure(figsize=(6, 3))
+                    plt.plot([datetime.utcfromtimestamp(t) for t in data["t"]], data["c"], marker="o")
+                    plt.title(f"{symbol} - 7 Day Price")
+                    plt.xlabel("Date")
+                    plt.ylabel("Close Price")
+                    plt.grid(True)
+                    plt.tight_layout()
+                    plt.savefig(img_path)
+                    plt.close()
+
+                    await interaction.followup.send(file=discord.File(img_path))
+            except Exception as e:
+                send_error_webhook(f"📉 Error creating manual graph for {symbol}: {e}")
+    except Exception as e:
+        send_error_webhook(f"📊 Error in manual stock graph command: {e}")
 
 
 async def main():
