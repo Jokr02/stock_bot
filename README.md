@@ -1,36 +1,34 @@
 # 📈 Discord Stock News Bot
 
-A complete Discord bot for tracking stock and ETF news, posting updates automatically or manually, and generating daily PDF reports with OpenAI summarization. It includes slash command support, webhook error reporting, and PDF merging.
+A complete Discord bot for tracking stock and ETF news, posting updates, generating visual charts, and summarizing news with OpenAI. The bot supports slash commands, error reporting, PDF generation, and chart visualizations.
 
 ---
 
-## 🗂 Directory Structure
+## 📁 Project Structure
 
 ```
 /opt/stock-bot/
-├── bot.py                # Main bot logic
-├── .env                  # Environment variables
-├── stocks.json           # Tracked symbols
-├── posted_news.json      # Used to prevent duplicate news
-├── posted_pdfs/          # Individual article PDFs
-├── reports/              # Daily merged PDF reports
-├── requirements.txt      # Python dependencies
+├── bot.py                 # Main bot script
+├── .env                   # Configuration file
+├── stocks.json            # Tracked symbols and types
+├── posted_news.json       # Posted news tracking
+├── posted_pdfs/           # Individual news PDFs
+├── reports/               # Merged daily reports
+├── requirements.txt       # Python dependencies
 ```
 
 ---
 
 ## ⚙️ Setup
 
-### 1. System Dependencies
-
-Install required packages:
+### 1. Install system dependencies
 
 ```bash
 sudo apt update
 sudo apt install python3.12-venv libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libgdk-pixbuf2.0-0 libxml2 libxslt1.1 libjpeg-dev libpng-dev build-essential
 ```
 
-### 2. Python Setup
+### 2. Create virtual environment and install Python packages
 
 ```bash
 cd /opt/stock-bot
@@ -39,15 +37,14 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. .env Configuration
-
-Create a `.env` file:
+### 3. Configure `.env`
 
 ```env
 DISCORD_BOT_TOKEN=...
 DISCORD_GUILD_ID=...
 DISCORD_CHANNEL_ID=...
 ERROR_WEBHOOK_URL=...
+STOCK_GRAPH_WEBHOOK_URL=...
 FINNHUB_API_KEY=...
 NEWSDATA_API_KEY=...
 OPENAI_API_KEY=...
@@ -59,11 +56,9 @@ PDF_REPORT_PATH=/opt/stock-bot/reports/
 
 ## 🛠 systemd Service
 
-To auto-run the bot:
-
 ```ini
 [Unit]
-Description=Discord Stock Bot
+Description=Stock Bot
 After=network.target
 
 [Service]
@@ -87,27 +82,29 @@ sudo systemctl enable --now stock-bot
 
 ## 💬 Slash Commands
 
-| Command            | Description                                 |
-|--------------------|---------------------------------------------|
-| `/addstock SYMBOL` | Add stock or ETF with type auto-detection   |
-| `/removestock`     | Remove stock or ETF                         |
-| `/validate_stocks` | Validate all stored symbols and types       |
-| `/liststocks`      | Show all tracked symbols                    |
-| `/news`            | Manually post current news                  |
-| `/report`          | Generate and post the merged daily PDF      |
+| Command            | Description                                          |
+|--------------------|------------------------------------------------------|
+| `/addstock SYMBOL` | Add a stock/ETF to tracking list                     |
+| `/removestock`     | Remove a stock/ETF                                   |
+| `/validate_stocks` | Re-validate symbols and update types                 |
+| `/liststocks`      | Show all tracked symbols with types                  |
+| `/news`            | Manually fetch and post current stock news           |
+| `/report`          | Generate and send daily news summary PDF             |
+| `/graphs format:pdf` | Generate 7-day charts as combined PDF              |
+| `/graphs format:images` | Generate and send charts as separate images     |
 
 ---
 
-## 🧠 Features
+## 📊 Features
 
-- ✅ Automatic news every 2h and daily digest
-- 📄 Merged daily PDF reports using OpenAI & WeasyPrint
-- 📌 Duplicate news filtering via hashing
-- 🧹 Clears old PDFs after report generation
-- 🔔 Error notifications via webhook
-- 🛠 Slash command support
-- 📤 Handles manual interruption gracefully
+- Automatic stock & ETF news fetching (2h interval)
+- Daily PDF summary via OpenAI (with article content)
+- Auto-generated charts (7-day line plots)
+- Error reporting via Discord webhook
+- Duplicate news filtering
+- Slash command support
+- Clean channel reports & archived summaries
 
 ---
 
-© 2025 — Stock News Automation for Discord
+© 2025 – Smart Market Monitoring via Discord
