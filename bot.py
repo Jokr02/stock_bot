@@ -18,6 +18,14 @@ from PyPDF2 import PdfMerger
 from datetime import datetime, timezone
 from discord import app_commands
 import pytz
+import yfinance as yf
+
+def get_symbol_name(symbol):
+    try:
+        info = yf.Ticker(symbol).info
+        return info.get("shortName") or symbol
+    except Exception:
+        return symbol
 
 
 POSTED_PDF_DIR = "/opt/stock-bot/posted_pdfs"
@@ -53,7 +61,7 @@ def generate_daily_report_from_pdfs(date_str):
     merger = PdfMerger()
     for file in sorted(Path(POSTED_PDF_DIR).glob("*.pdf")):
         merger.append(str(file))
-    output_path = os.path.join(PDF_REPORT_PATH, f"report_{date_str}.pdf")
+    output_path = os.path.join(POSTED_PDF_DIR, f"report_{date_str}.pdf")
     merger.write(output_path)
     merger.close()
     return output_path
@@ -66,7 +74,6 @@ TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GUILD_ID = int(os.getenv("DISCORD_GUILD_ID"))
 CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID"))
 ERROR_WEBHOOK_URL = os.getenv("ERROR_WEBHOOK_URL")
-FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 NEWSDATA_API_KEY = os.getenv("NEWSDATA_API_KEY")
 POSTED_NEWS_PATH = "posted_news.json"
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -75,30 +82,29 @@ STOCKS_FILE = "stocks.json"
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+
 def load_stocks():
-    if Path(STOCKS_FILE).exists():
-        with open(STOCKS_FILE, "r") as f:
-            return json.load(f)
-    return {}
+    try:
+        with open("/opt/stock-bot/stocks.json", "r") as f:
+            data = json.load(f)
+        # Erwartet Liste wie: ["AAPL", "MSFT", "TSLA"]
+        if isinstance(data, list):
+            return [s.upper() for s in data if isinstance(s, str) and s.strip()]
+        # Oder Format: {"stocks": [...]}
+        elif isinstance(data, dict) and "stocks" in data:
+            return [s.upper() for s in data["stocks"] if isinstance(s, str) and s.strip()]
+        else:
+            print("⚠️ Ungültiges Format in stocks.json")
+            return []
+    except Exception as e:
+        print(f"⚠️ Fehler beim Laden von stocks.json: {e}")
+        return ["AAPL", "MSFT", "TSLA"]  # Fallback
+
 
 def save_stocks(stocks: dict):
     with open(STOCKS_FILE, "w") as f:
         json.dump(stocks, f, indent=2)
 
-def get_symbol_type(symbol: str) -> str:
-    """Returns the type of the symbol according to Finnhub (Stock, ETF, etc.)"""
-    try:
-        url = "https://finnhub.io/api/v1/search"
-        params = {"q": symbol, "token": FINNHUB_API_KEY}
-        response = requests.get(url, params=params)
-        if response.status_code != 200:
-            return None
-        for entry in response.json().get("result", []):
-            if entry.get("symbol", "").upper() == symbol.upper():
-                return entry.get("type", "Unknown").capitalize()
-    except Exception as e:
-        print(f"[Type detection error] {symbol}: {e}")
-    return None
 
 
 def send_error_webhook(message):
@@ -113,36 +119,6 @@ def get_news_for_symbol(symbol):
     news_items = []
 
     posted = load_posted_news()
-
-    # === 1. Finnhub ===
-    try:
-        url = f"https://finnhub.io/api/v1/company-news"
-        params = {
-            "symbol": symbol,
-            "from": str(today),
-            "to": str(today),
-            "token": FINNHUB_API_KEY
-        }
-        r = requests.get(url, params=params)
-        if r.status_code == 200:
-            data = r.json()
-            for item in data[:5]:  # Max 5 Messageen prüfen
-                headline = item.get("headline")
-                source = item.get("source")
-                url = item.get("url")
-                timestamp = item.get("datetime")
-                date = datetime.fromtimestamp(timestamp, timezone.utc).date() if timestamp else None
-
-                if not (headline and url and date == today):
-                    continue
-
-                news_id = hash_news(headline, url)
-                if news_id in posted:
-                    continue
-                posted[news_id] = True
-                news_items.append(f"📰 [{headline}]({url}) ({source})")
-    except Exception as e:
-        print(f"[Finnhub Error] {symbol}: {e}")
 
     # === 2. Newsdata.io ===
     try:
@@ -217,7 +193,7 @@ def fetch_news(tickers):
     for ticker in tickers:
         news = get_news_for_symbol(ticker)
         if news and not news[0].startswith("❌"):
-            all_news.append(f"**{ticker}**\n" + "\n".join(news))
+            all_news.append(f"**{get_symbol_name(ticker)} ({ticker})**\n" + "\n".join(news))
         else:
             errors.append(f"{ticker}: No usable news found")
 
@@ -238,6 +214,7 @@ def generate_daily_report(text_content, date_str):
             ]
         )
         summary = response.choices[0].message.content
+        print("✅ GPT-Zusammenfassung erhalten.")
 
         # removed: summary = response['choices'][0]['message']['content']
     except Exception as e:
@@ -260,11 +237,24 @@ def generate_daily_report(text_content, date_str):
     </body>
     </html>
     """
-    report_dir = os.getenv("PDF_REPORT_PATH")
-    os.makedirs(report_dir, exist_ok=True)
-    output_path = os.path.join(report_dir, f"report_{date_str}.pdf")
+    os.makedirs(POSTED_PDF_DIR, exist_ok=True)
+    output_path = os.path.join(POSTED_PDF_DIR, f"report_{date_str}.pdf")
     HTML(string=html).write_pdf(output_path)
     return output_path
+
+def load_daily_articles(date_str):
+    path = f"/opt/stock-bot/data/articles/{date_str}.txt"
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    return "⚠️ Keine Artikeldaten für diesen Tag vorhanden."
+
+def load_daily_prices(date_str):
+    path = f"/opt/stock-bot/data/prices/{date_str}.txt"
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    return "⚠️ Keine Preisdaten für diesen Tag vorhanden."
 
 
 def is_market_open():
@@ -280,22 +270,6 @@ def is_market_open():
     return False
 
 
-def is_valid_symbol(symbol):
-    """Checks whether the symbol exists on Finnhub."""
-    try:
-        url = f"https://finnhub.io/api/v1/search"
-        params = {"q": symbol, "token": FINNHUB_API_KEY}
-        response = requests.get(url, params=params)
-        if response.status_code != 200:
-            return False
-
-        results = response.json().get("result", [])
-        return any(res.get("symbol", "").upper() == symbol.upper() for res in results)
-    except Exception as e:
-        print(f"[Symbol Check Error] {symbol}: {e}")
-        return False
-
-
 
 @tasks.loop(hours=2)
 async def periodic_news():
@@ -307,7 +281,7 @@ async def periodic_news():
     for symbol in tickers:
         news = get_news_for_symbol(symbol)
         if news:
-            news_sections.append(f"**{symbol}**\n" + "\n".join(news))
+            news_sections.append(f"**{get_symbol_name(ticker)} ({ticker})**\\n" + "\\n".join(news))
 
     if news_sections:
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -330,14 +304,20 @@ async def daily_news():
 
 @bot.tree.command(name="news", description="Manually post current stock news")
 async def manual_news(interaction: discord.Interaction):
-    if not is_market_open():
-        await interaction.response.send_message("⚠️ The market is currently closed. Data is available Mon–Fri, 08:00–22:00 Europe/Berlin time.")
-        return
-    await interaction.response.defer()
+    #if not is_market_open():
+    #    await interaction.response.send_message("⚠️ The market is currently closed. Data is available Mon–Fri, 08:00–22:00 Europe/Berlin time.")
+    #    return
+    #await interaction.response.defer()
     stocks = load_stocks()
     news = fetch_news(stocks)
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     await interaction.followup.send(f"🗞 **Current stock news ({now})**\n{news}")
+
+def get_symbol_type(symbol):
+    # Du kannst diese Logik später verfeinern.
+    if symbol.upper().endswith(".DE"):
+        return "ETF"
+    return "Stock"
 
 @bot.tree.command(name="addstock", description="Add stock or ETF (with type detection)")
 async def add_stock(interaction: discord.Interaction, symbol: str):
@@ -393,12 +373,103 @@ async def validate_stocks(interaction: discord.Interaction):
 
 
 
-@bot.tree.command(name="report", description="Manuell PDF-daily report generate und senden")
+@bot.tree.command(name="report", description="Tagesreport mit Kursveränderungen & GPT-Zusammenfassung")
 async def manual_report(interaction: discord.Interaction):
     await interaction.response.defer()
     date_str = datetime.now().strftime("%Y-%m-%d")
-    pdf_file = generate_daily_report_from_pdfs(date_str)
-    await interaction.followup.send(f"📄 **daily report {date_str} (zusammengeführt aus Artikeln)**", file=discord.File(pdf_file))
+    await interaction.followup.send("📊 Starte Erstellung des Reports...")
+
+    # Artikel & Kurse
+    articles = load_daily_articles(date_str)
+    prices = load_daily_prices(date_str)
+    combined_text = articles + "\n\n📈 Kurse:\n" + prices
+
+    # 📉 Kursveränderungen sicher abfragen
+    import pytz
+    import asyncio
+    berlin_tz = pytz.timezone("Europe/Berlin")
+    today = datetime.now(berlin_tz).date()
+
+    # 📉 Kursveränderungen mit Discord-Fortschritt & Timeout
+    import pytz, asyncio
+    berlin_tz = pytz.timezone("Europe/Berlin")
+    today = datetime.now(berlin_tz).date()
+
+    async def fetch_change(symbol, index, total):
+        try:
+            await interaction.followup.send(f"🔍 [{index}/{total}] Lade Kursdaten für {symbol}...")
+            print(f"🔄 Hole Daten für {symbol}")
+            ticker = yf.Ticker(symbol)
+            hist = ticker.history(period="2d")
+            if len(hist) >= 2:
+                y_close = hist["Close"].iloc[-2]
+                t_close = hist["Close"].iloc[-1]
+                delta = t_close - y_close
+                pct = (delta / y_close) * 100
+                return f"{symbol}: {t_close:.2f} EUR ({delta:+.2f}, {pct:+.2f}%)"
+            return f"{symbol}: Keine Kursdaten verfügbar."
+        except Exception as e:
+            return f"{symbol}: Fehler – {e}"
+
+    stock_symbols = load_stocks()
+    changes = []
+    for i, symbol in enumerate(stock_symbols):
+        try:
+            result = await asyncio.wait_for(fetch_change(symbol, i + 1, len(stock_symbols)), timeout=5)
+            changes.append(result)
+        except asyncio.TimeoutError:
+            timeout_msg = f"{symbol}: ❌ Timeout bei Kursabfrage"
+            changes.append(timeout_msg)
+            await interaction.followup.send(timeout_msg)
+
+    combined_text += "\n\n📊 Kursveränderungen heute:\n" + "\n".join(changes)
+
+
+    # GPT-Zusammenfassung mit Timeout & Fehlerbehandlung
+    try:
+        await interaction.followup.send("🧠 Erstelle GPT-Zusammenfassung...")
+        import openai
+        client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        safe_input = combined_text[:3000]
+        response = await asyncio.wait_for(
+            asyncio.to_thread(client.chat.completions.create,
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "Fasse die folgenden Finanznachrichten und Kursdaten professionell zusammen."},
+                    {"role": "user", "content": safe_input}
+                ]
+            ),
+            timeout=30
+        )
+        summary = response.choices[0].message.content
+        print("✅ GPT-Zusammenfassung erfolgreich.")
+    except asyncio.TimeoutError:
+        summary = "⚠️ GPT-Zusammenfassung: Timeout"
+        send_error_webhook(summary)
+    except Exception as e:
+        summary = f"⚠️ GPT-Zusammenfassung: Fehler – {e}"
+        send_error_webhook(summary)
+
+    # PDF generieren
+    await interaction.followup.send("📝 Erzeuge PDF-Datei...")
+    from weasyprint import HTML
+    POSTED_PDF_DIR = "/opt/stock-bot/reports"
+    os.makedirs(POSTED_PDF_DIR, exist_ok=True)
+    pdf_path = os.path.join(POSTED_PDF_DIR, f"report_{date_str}.pdf")
+    html = f"""
+    <html><body>
+        <h1>📈 Aktien-Tagesreport – {date_str}</h1>
+        <h2>🔎 GPT-Zusammenfassung</h2>
+        <p>{summary.replace('\\n', '<br>')}</p>
+        <h2>🗞 Einzelne News, Kurse & Veränderungen</h2>
+        <pre>{combined_text}</pre>
+    </body></html>
+    """
+    HTML(string=html).write_pdf(pdf_path)
+
+    await interaction.followup.send(f"📄 **daily report {date_str}**", file=discord.File(pdf_path))
+
+
 
 @bot.tree.command(name="liststocks", description="Displays all tracked stocks and ETFs with type")
 async def list_stocks(interaction: discord.Interaction):
@@ -437,23 +508,13 @@ async def post_daily_stock_graphs():
             for symbol in stocks:
                 try:
                     import matplotlib.pyplot as plt
-                    img_path = f"/tmp/{symbol}_chart.png"
-                    end = datetime.now(timezone.utc)
-                    start = end - timedelta(days=7)
-                    url = f"https://finnhub.io/api/v1/stock/candle"
-                    params = {
-                        "symbol": symbol,
-                        "resolution": "D",
-                        "from": int(start.timestamp()),
-                        "to": int(end.timestamp()),
-                        "token": FINNHUB_API_KEY
-                    }
-                    r = requests.get(url, params=params)
-                    data = r.json()
-                    if data.get("s") == "ok":
+                    img_path = f"/opt/stock-bot/pngs/{symbol}_chart.png"
+                    ticker = yf.Ticker(symbol)
+                    hist = ticker.history(period="7d")
+                    if not hist.empty:
                         plt.figure(figsize=(6, 3))
-                        plt.plot([datetime.utcfromtimestamp(t) for t in data["t"]], data["c"], marker="o")
-                        plt.title(f"{symbol} - 7 Day Price")
+                        plt.plot(hist.index, hist["Close"], marker="o")
+                        plt.title(f"{get_symbol_name(symbol)} ({symbol}) - 7 Day Price")
                         plt.xlabel("Date")
                         plt.ylabel("Close Price")
                         plt.grid(True)
@@ -470,36 +531,26 @@ async def post_daily_stock_graphs():
 
 
 
+
 @bot.tree.command(name="graphs", description="Manually post current stock/ETF 7-day graphs")
-@app_commands.describe(format="Choose output format: pdf or images")
 async def manual_post_graphs(interaction: discord.Interaction, format: str = "pdf"):
-    if not is_market_open():
-        await interaction.response.send_message("⚠️ The market is currently closed. Charts are available Mon–Fri, 08:00–22:00 Europe/Berlin time.")
-        return
-    await interaction.response.defer(thinking=True)
+    #if not is_market_open():
+    #    await interaction.response.send_message("⚠️ The market is currently closed. Charts are available Mon–Fri, 08:00–22:00 Europe/Berlin time.")
+    #    return
+    #await interaction.response.defer(thinking=True)
     stocks = load_stocks()
     chart_paths = []
 
     async def generate_chart(symbol):
         try:
             import matplotlib.pyplot as plt
-            img_path = f"/tmp/{symbol}_manual_chart.png"
-            end = datetime.now(timezone.utc)
-            start = end - timedelta(days=7)
-            url = f"https://finnhub.io/api/v1/stock/candle"
-            params = {
-                "symbol": symbol,
-                "resolution": "D",
-                "from": int(start.timestamp()),
-                "to": int(end.timestamp()),
-                "token": FINNHUB_API_KEY
-            }
-            r = requests.get(url, params=params)
-            data = r.json()
-            if data.get("s") == "ok":
+            img_path = f"/opt/stock-bot/pngs/{symbol}_manual_chart.png"
+            ticker = yf.Ticker(symbol)
+            hist = ticker.history(period="7d")
+            if not hist.empty:
                 plt.figure(figsize=(6, 3))
-                plt.plot([datetime.utcfromtimestamp(t) for t in data["t"]], data["c"], marker="o")
-                plt.title(f"{symbol} - 7 Day Price")
+                plt.plot(hist.index, hist["Close"], marker="o")
+                plt.title(f"{get_symbol_name(symbol)} ({symbol}) - 7 Day Price")
                 plt.xlabel("Date")
                 plt.ylabel("Close Price")
                 plt.grid(True)
@@ -518,60 +569,27 @@ async def manual_post_graphs(interaction: discord.Interaction, format: str = "pd
         if path:
             chart_paths.append((symbol, path))
 
-    if format.lower() == "images":
-        for _, path in chart_paths:
-            await interaction.followup.send(file=discord.File(path))
-    else:
-        if not chart_paths:
-            await interaction.followup.send("⚠️ No charts could be generated.")
-            return
+    if not chart_paths:
+        await interaction.followup.send("⚠️ No charts could be generated.")
+        return
 
-        from PyPDF2 import PdfMerger
+    from weasyprint import HTML
+    from PyPDF2 import PdfMerger
+
+    try:
         merger = PdfMerger()
         for _, path in chart_paths:
-            merger.append(path)
-        pdf_path = "/tmp/graphs_report.pdf"
+            if Path(path).exists():
+                pdf_path = path.replace(".png", ".pdf")
+                HTML(string=f"<img src='file://{path}' width='600'>").write_pdf(pdf_path)
+                merger.append(pdf_path)
+        pdf_path = "/opt/stock-bot/reports/graphs_report.pdf"
         merger.write(pdf_path)
         merger.close()
-        await interaction.followup.send(content="📊 All graphs combined in one PDF", file=discord.File(pdf_path))
-async def manual_post_graphs(interaction: discord.Interaction):
-    await interaction.response.defer()
-    try:
-        stocks = load_stocks()
-        for symbol in stocks:
-            try:
-                import matplotlib.pyplot as plt
-                img_path = f"/tmp/{symbol}_manual_chart.png"
-                end = datetime.now(timezone.utc)
-                start = end - timedelta(days=7)
-                url = f"https://finnhub.io/api/v1/stock/candle"
-                params = {
-                    "symbol": symbol,
-                    "resolution": "D",
-                    "from": int(start.timestamp()),
-                    "to": int(end.timestamp()),
-                    "token": FINNHUB_API_KEY
-                }
-                r = requests.get(url, params=params)
-                data = r.json()
-                if data.get("s") == "ok":
-                    plt.figure(figsize=(6, 3))
-                    plt.plot([datetime.utcfromtimestamp(t) for t in data["t"]], data["c"], marker="o")
-                    plt.title(f"{symbol} - 7 Day Price")
-                    plt.xlabel("Date")
-                    plt.ylabel("Close Price")
-                    plt.grid(True)
-                    plt.tight_layout()
-                    plt.savefig(img_path)
-                    plt.close()
-
-                    await interaction.followup.send(file=discord.File(img_path))
-            except Exception as e:
-                send_error_webhook(f"📉 Error creating manual graph for {symbol}: {e}")
+        await interaction.followup.send(content="📊 Combined PDF generated", file=discord.File(pdf_path))
     except Exception as e:
-        send_error_webhook(f"📊 Error in manual stock graph command: {e}")
-
-
+        send_error_webhook(f"❌ Error creating PDF: {e}")
+        await interaction.followup.send("❌ Failed to generate PDF.")
 async def main():
     print("🚀 Starte Stock-Bot...")
     async with bot:
