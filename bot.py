@@ -275,7 +275,7 @@ def is_market_open():
     # Default NYSE hours in Europe/Berlin timezone: 15:30–22:00
     if weekday >= 5:
         return False
-    if (hour > 15 or (hour == 15 and minute >= 30)) and (hour < 22):
+    if (hour > 8 or (hour == 8 and minute >= 00)) and (hour < 22):
         return True
     return False
 
