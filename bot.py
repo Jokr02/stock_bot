@@ -424,6 +424,30 @@ async def manual_report(interaction: discord.Interaction):
 
     combined_text += "\n\n📊 Kursveränderungen heute:\n" + "\n".join(changes)
 
+    # 📝 Automatisches Schreiben der Textdateien für den Tag
+    article_dir = "/opt/stock-bot/articles"
+    price_dir = "/opt/stock-bot/prices"
+    os.makedirs(article_dir, exist_ok=True)
+    os.makedirs(price_dir, exist_ok=True)
+
+    article_path = os.path.join(article_dir, f"{date_str}.txt")
+    price_path = os.path.join(price_dir, f"{date_str}.txt")
+
+    try:
+        # ✍️ Speichere Artikeltext (falls von GPT generiert)
+        with open(article_path, "w", encoding="utf-8") as f:
+            f.write(articles.strip() if articles else "Keine Artikeldaten.")
+    except Exception as e:
+        print(f"⚠️ Fehler beim Schreiben von {article_path}: {e}")
+
+    try:
+        # ✍️ Speichere Tagespreise (aus load_daily_prices + Preisveränderungen)
+        with open(price_path, "w", encoding="utf-8") as f:
+            f.write(prices.strip() + "\n\n" + "\n".join(changes))
+    except Exception as e:
+        print(f"⚠️ Fehler beim Schreiben von {price_path}: {e}")
+
+
 
     # GPT-Zusammenfassung mit Timeout & Fehlerbehandlung
     try:
