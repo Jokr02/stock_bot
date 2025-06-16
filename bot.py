@@ -331,7 +331,7 @@ async def daily_news():
 @bot.tree.command(name="news", description="Manually post current stock news")
 async def manual_news(interaction: discord.Interaction):
     if not is_market_open():
-        await interaction.response.send_message("⚠️ The market is currently closed. Data is available Mon–Fri, 15:30–22:00 Europe/Berlin time.")
+        await interaction.response.send_message("⚠️ The market is currently closed. Data is available Mon–Fri, 08:00–22:00 Europe/Berlin time.")
         return
     await interaction.response.defer()
     stocks = load_stocks()
@@ -474,7 +474,7 @@ async def post_daily_stock_graphs():
 @app_commands.describe(format="Choose output format: pdf or images")
 async def manual_post_graphs(interaction: discord.Interaction, format: str = "pdf"):
     if not is_market_open():
-        await interaction.response.send_message("⚠️ The market is currently closed. Charts are available Mon–Fri, 15:30–22:00 Europe/Berlin time.")
+        await interaction.response.send_message("⚠️ The market is currently closed. Charts are available Mon–Fri, 08:00–22:00 Europe/Berlin time.")
         return
     await interaction.response.defer(thinking=True)
     stocks = load_stocks()
