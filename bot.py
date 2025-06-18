@@ -86,18 +86,15 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 def load_stocks():
     try:
-        with open("/opt/stock-bot/stocks.json", "r") as f:
+        with open(STOCKS_FILE, "r") as f:
             data = json.load(f)
-        if isinstance(data, list):
-            return [s.upper() for s in data if isinstance(s, str)]
-        elif isinstance(data, dict):
-            return [s.upper() for s in data.keys()]
-        else:
-            print("⚠️ Invalid format in stocks.json")
-            return []
+        if isinstance(data, dict):
+            return data  # Format: {"AAPL": "Stock", ...}
+        elif isinstance(data, list):
+            return {s.upper(): "Unknown" for s in data if isinstance(s, str)}
     except Exception as e:
         print(f"⚠️ Error loading stock list: {e}")
-        return ["AAPL", "MSFT", "TSLA"]
+    return {}
 
 
 def save_stocks(stocks: dict):
@@ -310,6 +307,11 @@ async def daily_news():
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     await channel.send(f"🗞 **Daily Stock News ({now})**\n{news}")
 
+@tasks.loop(minutes=60)
+async def weekly_report_scheduler():
+    await weekly_report()
+
+
 @bot.tree.command(name="news", description="Manually post current stock news")
 async def manual_news(interaction: discord.Interaction):
     #if not is_market_open():
@@ -325,31 +327,58 @@ def get_symbol_type(symbol):
     try:
         with open("/opt/stock-bot/stocks.json", "r") as f:
             data = json.load(f)
-        # Nur wenn Datei ein dict ist (dein Format)
         if isinstance(data, dict):
-            return data.get(symbol.upper(), "Unknown")
+            for key in data:
+                if key.upper() == symbol.upper():
+                    return data[key]
     except Exception as e:
         print(f"⚠️ Error reading stocks.json in get_symbol_type(): {e}")
     return "Unknown"
 
 
-@bot.tree.command(name="addstock", description="Add stock or ETF (with type detection)")
+
+@bot.tree.command(name="addstock", description="Add stock, ETF or crypto (with automatic type detection)")
 async def add_stock(interaction: discord.Interaction, symbol: str):
+    await interaction.response.defer()
+
     symbol = symbol.upper()
     stocks = load_stocks()
 
     if symbol in stocks:
-        await interaction.response.send_message(f"⚠️ `{symbol}` is already registered as `{stocks[symbol]}`.")
+        await interaction.followup.send(f"⚠️ `{symbol}` is already registered as `{stocks[symbol]}`.")
         return
 
-    symbol_type = get_symbol_type(symbol)
-    if not symbol_type or symbol_type == "Unknown":
-        await interaction.response.send_message(f"❌ Symbol `{symbol}` could not be identified as a stock or ETF.")
-        return
+    # Auto-detect Crypto
+    if symbol.endswith("-EUR"):
+        try:
+            yf.Ticker(symbol).history(period="1d")  # Test if it works
+            symbol_type = "Crypto"
+        except Exception:
+            await interaction.followup.send(f"❌ `{symbol}` not found or not supported.")
+            return
+    else:
+        # Live detection via yfinance
+        try:
+            ticker = yf.Ticker(symbol)
+            info = ticker.info
+            quote_type = info.get("quoteType", "").lower()
 
+            if quote_type == "etf":
+                symbol_type = "ETF"
+            elif quote_type in ["equity", "stock"]:
+                symbol_type = "Stock"
+            else:
+                raise ValueError("Unrecognized quoteType")
+        except Exception as e:
+            await interaction.followup.send(f"❌ Symbol `{symbol}` could not be identified as a stock or ETF.")
+            print(f"⚠️ Failed to identify symbol {symbol}: {e}")
+            return
+
+    # Save
     stocks[symbol] = symbol_type
     save_stocks(stocks)
-    await interaction.response.send_message(f"✅ `{symbol}` added as `{symbol_type}`.")
+    await interaction.followup.send(f"✅ `{symbol}` added as `{symbol_type}`.")
+
 
 
 
@@ -471,7 +500,7 @@ async def manual_report(interaction: discord.Interaction):
     
     changes = []
     
-    await interaction.followup.send(f"🔄 Loading price data for {len(stock_symbols)} Aktien...")
+    #await interaction.followup.send(f"🔄 Loading price data for {len(stock_symbols)} Aktien...")
 
     
     berlin_tz = pytz.timezone("Europe/Berlin")
@@ -591,18 +620,23 @@ async def manual_report(interaction: discord.Interaction):
 
 
 
-@bot.tree.command(name="liststocks", description="Displays all tracked stocks and ETFs with type")
-async def list_stocks(interaction: discord.Interaction):
+@bot.tree.command(name="liststocks", description="List all currently tracked stock symbols")
+async def liststocks(interaction: discord.Interaction):
+    await interaction.response.defer()  # ✅ verhindert Timeout
+    print(load_stocks())
+
     stocks = load_stocks()
     if not stocks:
-        await interaction.response.send_message("📭 No symbols saved yet.")
+        await interaction.followup.send("📭 No stocks currently tracked.")
         return
 
-    message = "📈 **Tracked symbols:**\n"
-    for symbol, typ in stocks.items():
-        message += f"- `{symbol}` ({typ})\n"
-    await interaction.response.send_message(message)
+    msg = "**Tracked symbols:**\n"
+    for symbol in stocks:
+        name = get_symbol_name(symbol)
+        stock_type = get_symbol_type(symbol)
+        msg += f"- {symbol} ({name}) – {stock_type}\n"
 
+    await interaction.followup.send(msg)
 
 
 @bot.event
@@ -615,7 +649,7 @@ async def on_ready():
     #daily_news.start()
     check_for_report_time.start()
     post_daily_stock_graphs.start()
-
+    weekly_report_scheduler.start()
 
 
 @tasks.loop(minutes=5)
@@ -715,14 +749,18 @@ async def manual_post_graphs(interaction: discord.Interaction, format: str = "pd
         try:
             with open(final_pdf, "rb") as f:
                 response = requests.post(webhook_url, files={"file": f})
-                #if 200 <= response.status_code < 300:
-                #    await interaction.followup.send("✅ Chart successfully sent to webhook.")
-                #else:
-                #    await interaction.followup.send(f"⚠️ Error during webhook upload: {response.status_code} {response.text}")
+                if 200 <= response.status_code < 300:
+                    await interaction.followup.send("📊 Here is the chart report:")
+                else:
+                    await interaction.followup.send(f"⚠️ Error during webhook upload: {response.status_code} {response.text}")
         except Exception as e:
             await interaction.followup.send(f"❌ Error sending webhook: {e}")
     else:
-        await interaction.followup.send("❌ Webhook URL is not set.")
+        # Wenn kein Webhook gesetzt, sende PDF direkt an Discord
+        await interaction.followup.send(
+            content="📊 Here is the chart report:",
+            file=discord.File(final_pdf)
+        )
 
 async def main():
     print("🚀 Starte Stock-Bot...")
@@ -736,8 +774,67 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         send_error_webhook("🛑 Bot was manually stopped.")
 
+async def weekly_report():
+    now = datetime.now(pytz.timezone("Europe/Berlin"))
+    if now.weekday() != 4 or now.hour < 22:
+        return  # Only run Friday evening after 22:00
 
+    channel = bot.get_channel(CHANNEL_ID)
+    start_date = now - timedelta(days=4)
+    dates = [(start_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(5)]
 
+    # Load news + prices for Mon–Fri
+    weekly_articles = []
+    weekly_prices = []
+
+    for date_str in dates:
+        article_path = f"/opt/stock-bot/articles/{date_str}.txt"
+        price_path = f"/opt/stock-bot/prices/{date_str}.txt"
+
+        if os.path.exists(article_path):
+            with open(article_path, "r", encoding="utf-8") as f:
+                weekly_articles.append(f"\n📅 {date_str}\n" + f.read())
+
+        if os.path.exists(price_path):
+            with open(price_path, "r", encoding="utf-8") as f:
+                weekly_prices.append(f"\n📅 {date_str}\n" + f.read())
+
+    full_text = "\n".join(weekly_articles) + "\n\n" + "\n".join(weekly_prices)
+
+    if not full_text.strip():
+        await channel.send("📭 No data available for this week's report.")
+        return
+
+    # Generate GPT summary
+    try:
+        client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        response = await asyncio.to_thread(client.chat.completions.create,
+            model="gpt-4.1-nano",
+            messages=[
+                {"role": "system", "content": "Summarize and highlight the main trends of this week's stock market news and price movements."},
+                {"role": "user", "content": full_text[:3000]}
+            ]
+        )
+        summary = response.choices[0].message.content.strip()
+    except Exception as e:
+        summary = f"⚠️ GPT error: {e}"
+
+    # Build PDF
+    html = f"""
+    <html><body>
+    <h1>📈 Weekly Market Report – Week ending {now.strftime('%Y-%m-%d')}</h1>
+    <h2>🧠 GPT Summary</h2>
+    <p>{summary.replace('\n', '<br>')}</p>
+    <h2>🗞 Weekly News & Price Logs</h2>
+    <div style="white-space: pre-wrap; font-family: monospace;">
+    {full_text}
+    </div>
+    </body></html>
+    """
+    pdf_path = f"/opt/stock-bot/reports/weekly_report_{now.strftime('%Y-%m-%d')}.pdf"
+    HTML(string=html).write_pdf(pdf_path)
+
+    await channel.send(f"📄 **Weekly Report – Week ending {now.strftime('%Y-%m-%d')}**", file=discord.File(pdf_path))
 
 
 async def clear_channel(channel):
