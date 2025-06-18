@@ -1,2 +1,16 @@
-["Tesla", "Apple", "Nvidia"]
-
+{
+  "INDA": "ETF",
+  "NVDA": "Stock",
+  "AAPL": "Stock",
+  "1810.HK": "Stock",
+  "AMD": "Stock",
+  "RKLB": "Stock",
+  "INTC": "Stock",
+  "500.PA": "ETF",
+  "VEUR.AS": "ETF",
+  "VAPX.L": "ETF",
+  "PHYMF": "Stock",
+  "IWDA.L": "ETF",
+  "BTC-EUR": "Crypto",
+  "SOL-EUR": "Crypto"
+}
