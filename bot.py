@@ -276,7 +276,7 @@ def is_market_open():
 
 
 
-@tasks.loop(hours=2)
+@tasks.loop(minutes=30)
 async def periodic_news():
     if not is_market_open(): return
     channel = bot.get_channel(CHANNEL_ID)
@@ -298,9 +298,9 @@ async def periodic_news():
         for chunk in chunks:
             await channel.send(chunk)
 
-@tasks.loop(hours=24)
+@tasks.loop(hour=22)
 async def daily_news():
-    if not is_market_open(): return
+    #if not is_market_open(): return
     channel = bot.get_channel(CHANNEL_ID)
     stocks = load_stocks()
     news = fetch_news(stocks)
@@ -442,9 +442,9 @@ async def manual_report(interaction: discord.Interaction):
     stock_symbols = load_stocks()
     #await interaction.followup.send("📊 Starting report generation...")
 
-    # Lade bestehende Artikel/Kurse
+    # load saved articles/courses
     articles = load_daily_articles(date_str)
-    prices_today = []  # NEU: Preise für Kursteil
+    prices_today = []  
     chart_html_blocks = []
     chart_dir = "/opt/stock-bot/pngs"
     os.makedirs(chart_dir, exist_ok=True)
@@ -525,7 +525,7 @@ async def manual_report(interaction: discord.Interaction):
             result = await asyncio.wait_for(fetch_change(symbol), timeout=5)
             changes.append(result)
         except asyncio.TimeoutError:
-            changes.append(f"{symbol}: ❌ Timeout bei Kursabfrage")
+            changes.append(f"{symbol}: ❌ Timeout collecting price data")
     # NEU innerhalb der Kurs-Abfrage-Schleife
     ticker = yf.Ticker(symbol)
     hist = ticker.history(period="2d")
@@ -724,7 +724,7 @@ async def manual_post_graphs(interaction: discord.Interaction, format: str = "pd
             chart_paths.append((symbol, path))
 
     if not chart_paths:
-        await interaction.followup.send("⚠️ Keine No charts could be generated.")
+        await interaction.followup.send("⚠️ No charts could be generated.")
         return
 
     # PDF erstellen
@@ -763,7 +763,7 @@ async def manual_post_graphs(interaction: discord.Interaction, format: str = "pd
         )
 
 async def main():
-    print("🚀 Starte Stock-Bot...")
+    print("🚀 Starting Stock-Bot...")
     async with bot:
         await bot.start(TOKEN)
 
